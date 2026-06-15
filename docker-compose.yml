@@ -1,0 +1,67 @@
+networks:
+  radman_net:
+    driver: bridge
+
+services:
+  postgres_db:
+    image: postgres:alpine
+    container_name: radman_postgres
+    networks:
+      - radman_net
+    restart: always
+    environment:
+      POSTGRES_USER: radman_user
+      POSTGRES_PASSWORD: sdfs@
+      POSTGRES_DB: radman_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+# Yadet bashe baad postgre ro be "127.0.0.1:5432:5432" tagher bedi
+  redis_db:
+    image: redis:alpine
+    container_name: radman_redis
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - radman_net
+    volumes:
+      - ./redis.conf:/etc/redis/redis.conf
+    command: ["redis-server", "/etc/redis/redis.conf"]
+
+  radman_api:
+    build: ./backend
+    container_name: radman_backend
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - postgres_db
+    environment:
+      - GODEBUG=netdns=go
+      - APP_ENV=production 
+      - DATABASE_URL=host=postgres_db user=radman_user password=sdfs@ dbname=radman_db port=5432 sslmode=disable TimeZone=Asia/Tehran
+    env_file:
+      - ./backend/.env
+    networks:
+      - radman_net
+
+  radman_ingestion:
+    build: 
+      context: ./ingestion
+      dockerfile: Dockerfile
+    container_name: radman_ingestion
+    restart: always
+    ports:
+      - "50051:50051"
+    depends_on:
+      - redis_db
+    environment:
+      - REDIS_URL=redis://radman_service:ServicePass2026@redis_db:6379/0
+      - GODEBUG=netdns=go
+    env_file:
+      - ./backend/.env
+    networks:
+      - radman_net
