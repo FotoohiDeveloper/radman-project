@@ -1,0 +1,36 @@
+syntax = "proto3";
+package radman.ingestion.v1;
+option go_package = "radman.local/ingestion/internal/proto/ingestion/v1;ingestionv1";
+
+enum TargetType {
+  UFO = 0;
+  CRUISE_MISSILE = 1;
+  DRONE = 2;
+  HELICOPTER = 3;
+  FIGHTER_JET = 4;
+  UAV = 5;
+  AIRPLANE = 6;
+}
+
+message Point {
+  float az = 1;
+  float p = 2;
+  int64 t = 3;
+}
+
+message SensorBatchRequest {
+  TargetType y = 1;
+  double la = 2;
+  double lo = 3;
+  double al = 4;
+  repeated Point p = 5;
+}
+
+message SensorBatchResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+service IngestionService {
+  rpc SendBatch(SensorBatchRequest) returns (SensorBatchResponse);
+}
