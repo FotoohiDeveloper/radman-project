@@ -20,7 +20,8 @@ const (
 
 func main() {
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     "redis_db:6379",
+		Username: "radman_service",
 		Password: "ServicePass2026",
 		DB:       0,
 	})

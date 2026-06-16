@@ -4,7 +4,7 @@ networks:
 
 services:
   postgres_db:
-    image: postgres:alpine
+    image: postgres:17-alpine
     container_name: radman_postgres
     networks:
       - radman_net
@@ -63,5 +63,17 @@ services:
       - GODEBUG=netdns=go
     env_file:
       - ./backend/.env
+    networks:
+      - radman_net
+  
+
+  radman_processor:
+    build: 
+      context: ./processor
+      dockerfile: Dockerfile
+    container_name: radman_processor
+    restart: always
+    depends_on:
+      - redis_db
     networks:
       - radman_net
