@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/redis/go-redis/v9 v9.20.1
+	github.com/uber/h3-go/v4 v4.5.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
