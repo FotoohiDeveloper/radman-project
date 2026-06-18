@@ -10,7 +10,9 @@ import (
 	"github.com/uber/h3-go/v4"
 	"google.golang.org/protobuf/proto"
 
+	"radman.local/processor/internal/database"
 	"radman.local/processor/internal/geo"
+	"radman.local/processor/internal/tracker"
 	pb "radman.local/processor/proto"
 )
 
@@ -18,7 +20,7 @@ const (
 	StreamName    = "stream:visual:raw"
 	ConsumerGroup = "processor_group"
 	ConsumerName  = "worker_1"
-	H3Resolution  = 6 // ساخت شش‌ضلعی‌هایی به شعاع تقریبی ۳ کیلومتر
+	H3Resolution  = 6
 )
 
 type TargetCluster struct {
@@ -28,8 +30,12 @@ type TargetCluster struct {
 }
 
 func main() {
+	// ۱. اتصال به دیتابیس مستقل رهگیری
+	database.ConnectTrackingDB()
+
+	// ۲. اتصال به ردیس
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "redis_db:6379", // مخصوص محیط داکر
+		Addr:     "redis_db:6379",
 		Username: "radman_service",
 		Password: "ServicePass2026",
 		DB:       0,
@@ -43,27 +49,35 @@ func main() {
 
 	rdb.XGroupCreateMkStream(ctx, StreamName, ConsumerGroup, "0")
 
-	for {
-		// بافر کردن پیام‌ها در پنجره‌های ۲ ثانیه‌ای
+	// ۳. راه‌اندازی سرویس پاکسازی اهداف رها شده (هر ۱۰ ثانیه چک می‌کند)
+	go func() {
+		cleanupTicker := time.NewTicker(10 * time.Second)
+		for range cleanupTicker.C {
+			tracker.CleanStaleTracks()
+		}
+	}()
+
+	// ۴. راه‌اندازی تپش مرکزی سیستم (تیک ۱ ثانیه‌ای)
+	mainTicker := time.NewTicker(1 * time.Second)
+
+	for range mainTicker.C {
+		// خواندن پیام‌ها (با بلاک نیم ثانیه‌ای تا در تیک بعدی تاخیر ایجاد نشود)
 		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    ConsumerGroup,
 			Consumer: ConsumerName,
 			Streams:  []string{StreamName, ">"},
-			Count:    50,
-			Block:    2 * time.Second,
+			Count:    100,
+			Block:    500 * time.Millisecond,
 		}).Result()
 
-		if err == redis.Nil {
-			continue
-		} else if err != nil {
-			time.Sleep(1 * time.Second)
+		if err != nil && err != redis.Nil {
 			continue
 		}
 
 		clusters := make(map[string]map[pb.TargetType]*TargetCluster)
 		var processedIDs []string
 
-		// فاز ۱: خوشه‌بندی گزارش‌ها بر اساس منطقه H3
+		// فاز بلعیدن و خوشه‌بندی
 		for _, stream := range streams {
 			for _, message := range stream.Messages {
 				userID := message.Values["u"].(string)
@@ -74,10 +88,9 @@ func main() {
 					continue
 				}
 
-				// 🌟 حل ارور دوم: دریافت کردن err از تابع H3
 				cell, err := h3.LatLngToCell(h3.NewLatLng(batch.La, batch.Lo), H3Resolution)
 				if err != nil {
-					continue // اگر مختصات نامعتبر بود، این پکت رو رد کن
+					continue
 				}
 				cellID := cell.String()
 
@@ -93,46 +106,73 @@ func main() {
 				}
 
 				clusters[cellID][batch.Y].Reports = append(clusters[cellID][batch.Y].Reports, &batch)
-				// 🌟 حل ارور اول: اضافه کردن userID به لیست کاربران این خوشه
 				clusters[cellID][batch.Y].UserIDs = append(clusters[cellID][batch.Y].UserIDs, userID)
-				
 				processedIDs = append(processedIDs, message.ID)
 			}
 		}
 
-		// فاز ۲: محاسبه و رهگیری
+		// فاز پردازش و ارسال به موتور رهگیری (State Machine)
 		for cellID, targets := range clusters {
 			for targetType, cluster := range targets {
 				observerCount := len(cluster.Reports)
-
-				fmt.Printf("\n==================================================\n")
-				fmt.Printf("🌐 [H3 SECTOR DETECTED] Region ID: %s\n", cellID)
-				fmt.Printf("🎯 Target: %s | Observers: %d\n", targetType.String(), observerCount)
+				targetName := targetType.String()
 
 				if observerCount == 1 {
-					// 🚀 سناریو دوم تو: کاربر تیزبین و تنها!
 					report := cluster.Reports[0]
-					if len(report.P) > 0 {
-						lastPoint := report.P[len(report.P)-1] // استفاده از آخرین نقطه ارسالی کاربر
+					agl := geo.DefaultAGL[targetType]
 
-						agl := geo.DefaultAGL[targetType]
-						dist := geo.CalculateDistance(agl, lastPoint.P)
-						tLat, tLon := geo.CalculateTargetCoordinates(report.La, report.Lo, dist, lastPoint.Az)
+					// فقط یک بار لاگ می‌ندازیم که دیتای پایه رو گرفتیم
+					fmt.Printf("📥 [DATA INGEST] Absorbing %d historical points to calculate vector for %s...\n", len(report.P), targetName)
 
-						fmt.Println("⚠️ Status: Low Confidence (Single Observer Altitude Constraint)")
-						fmt.Printf("📍 Calculated Position -> Lat: %.6f, Lon: %.6f\n", tLat, tLon)
-						fmt.Printf("📏 Estimated Distance from Sensor: %.2f meters\n", dist)
+					for _, point := range report.P {
+						dist := geo.CalculateDistance(agl, point.P)
+						tLat, tLon := geo.CalculateTargetCoordinates(report.La, report.Lo, dist, point.Az)
+						
+						// ارسال نقاط به ترکر برای درآوردن سرعت (بدون لاگ اضافی)
+						tracker.ProcessNewDetection(targetName, tLat, tLon, agl, "Low", point.T)
 					}
 				} else {
-					// 🚀 سناریو اول تو: چند کاربر تو یک منطقه (در فاز بعدی مثلث‌بندی می‌شه)
-					fmt.Println("🔥 Status: High Confidence (Ready for Multi-Observer Triangulation)")
+					// سناریوی چند کاربره (تخمین میانگین)
+					var sumLat, sumLon float64
+					agl := geo.DefaultAGL[targetType]
+					validPoints := 0
+					
+					// 🌟 یک متغیر برای ذخیره زمان تقریبیِ این گروه از گزارش‌ها
+					var batchTimestamp int64 
+
+					for _, report := range cluster.Reports {
+						if len(report.P) > 0 {
+							lastPoint := report.P[len(report.P)-1]
+							dist := geo.CalculateDistance(agl, lastPoint.P)
+							lat, lon := geo.CalculateTargetCoordinates(report.La, report.Lo, dist, lastPoint.Az)
+							sumLat += lat
+							sumLon += lon
+							validPoints++
+							
+							// زمانِ اولین گزارش معتبر رو به عنوان زمانِ کل این گروه (Batch) در نظر می‌گیریم
+							if batchTimestamp == 0 {
+								batchTimestamp = lastPoint.T
+							}
+						}
+					}
+
+					if validPoints > 0 {
+						avgLat := sumLat / float64(validPoints)
+						avgLon := sumLon / float64(validPoints)
+						
+						// 🌟 حل ارور: پارامتر ششم (batchTimestamp) به تابع اضافه شد
+						tracker.ProcessNewDetection(targetName, avgLat, avgLon, agl, "High", batchTimestamp)
+						fmt.Printf("🔥 [TRACKER INGEST] Multi-Observer (%d) -> Type: %s | Cell: %s\n", validPoints, targetName, cellID)
+					}
 				}
-				fmt.Printf("==================================================\n")
 			}
 		}
 
+		// تایید پیام‌ها در ردیس
 		if len(processedIDs) > 0 {
 			rdb.XAck(ctx, StreamName, ConsumerGroup, processedIDs...)
 		}
+
+		tracker.PredictNextStep()
 	}
 }
