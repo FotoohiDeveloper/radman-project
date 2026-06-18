@@ -1,12 +1,13 @@
 package tracker
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"time"
-	"fmt"
 
 	"github.com/google/uuid"
+	"radman.local/processor/internal/config"
 	"radman.local/processor/internal/database"
 )
 
@@ -25,11 +26,6 @@ type LiveTrack struct {
 var (
 	GlobalTracks = make(map[uuid.UUID]*LiveTrack)
 	mu           sync.Mutex
-)
-
-const (
-	AssociationRadius = 2000.0
-	CoastTimeout      = 5 * time.Minute
 )
 
 func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
@@ -52,7 +48,7 @@ func ProcessNewDetection(targetType string, lat, lon, alt float64, confidence st
 
 	pointTime := time.Unix(pointTimestamp, 0)
 	var matchedTrack *LiveTrack
-	minDist := AssociationRadius
+	minDist := config.App.Radar.AssociationRadius
 
 	for _, track := range GlobalTracks {
 		if track.TargetType != targetType {
@@ -71,7 +67,7 @@ func ProcessNewDetection(targetType string, lat, lon, alt float64, confidence st
 			matchedTrack.VelocityX = (lon - matchedTrack.CurrentLon) / dt
 			matchedTrack.VelocityY = (lat - matchedTrack.CurrentLat) / dt
 		}
-		
+
 		matchedTrack.CurrentLat = lat
 		matchedTrack.CurrentLon = lon
 		matchedTrack.CurrentAlt = alt
@@ -121,8 +117,10 @@ func CleanStaleTracks() {
 	defer mu.Unlock()
 	now := time.Now()
 
+	timeoutDuration := time.Duration(config.App.Radar.CoastTimeout) * time.Second
+
 	for id, track := range GlobalTracks {
-		if now.Sub(track.LastUpdated) > CoastTimeout {
+		if now.Sub(track.LastUpdated) > timeoutDuration {
 			delete(GlobalTracks, id)
 			database.DB.Model(&database.TrackRecord{}).Where("id = ?", id).Update("status", "dropped")
 		} else if now.Sub(track.LastUpdated) > 10*time.Second {
@@ -143,10 +141,9 @@ func PredictNextStep() {
 		if track.VelocityX != 0 || track.VelocityY != 0 {
 			track.CurrentLat += track.VelocityY
 			track.CurrentLon += track.VelocityX
-			
 			track.LastUpdated = track.LastUpdated.Add(1 * time.Second)
 
-			fmt.Printf("🔮 [RADAR PREDICT] 🎯 Target: %s | ID: %s | Lat: %.6f | Lon: %.6f\n", 
+			fmt.Printf("🔮 [RADAR PREDICT] 🎯 Target: %s | ID: %s | Lat: %.6f | Lon: %.6f\n",
 				track.TargetType, id.String()[:8], track.CurrentLat, track.CurrentLon)
 		}
 	}

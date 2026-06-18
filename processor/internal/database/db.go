@@ -3,9 +3,11 @@ package database
 import (
 	"log"
 	"time"
+
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"radman.local/processor/internal/config"
 )
 
 type TrackRecord struct {
@@ -29,8 +31,8 @@ type TrackPoint struct {
 var DB *gorm.DB
 
 func ConnectTrackingDB() {
-	dsn := "host=postgres_db user=radman_user password=sdfs@ dbname=radman_tracking_db port=5432 sslmode=disable TimeZone=Asia/Tehran"
-	
+	dsn := config.App.DB.DSN
+
 	var err error
 	for i := 1; i <= 5; i++ {
 		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})

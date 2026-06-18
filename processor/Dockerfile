@@ -15,4 +15,5 @@ RUN apk add --no-cache tzdata libc6-compat
 ENV TZ=Asia/Tehran
 WORKDIR /app
 COPY --from=builder /app/main .
+COPY --from=builder /app/config.yaml .
 CMD ["./main"]

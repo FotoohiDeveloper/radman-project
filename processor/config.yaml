@@ -1,0 +1,21 @@
+redis:
+  addr: "redis_db:6379"
+  user: "radman_service"
+  pass: "ServicePass2026"
+
+db:
+  dsn: "host=postgres_db user=radman_user password=sdfs@ dbname=radman_tracking_db port=5432 sslmode=disable TimeZone=Asia/Tehran"
+
+radar:
+  h3_resolution: 6
+  association_radius_meters: 2000.0
+  coast_timeout_seconds: 300
+
+targets_agl:
+  UFO: 1000.0
+  CRUISE_MISSILE: 100.0
+  DRONE: 200.0
+  HELICOPTER: 500.0
+  FIGHTER_JET: 5000.0
+  UAV: 1500.0
+  AIRPLANE: 10000.0

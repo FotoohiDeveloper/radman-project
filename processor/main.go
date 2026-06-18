@@ -10,6 +10,7 @@ import (
 	"github.com/uber/h3-go/v4"
 	"google.golang.org/protobuf/proto"
 
+	"radman.local/processor/internal/config"
 	"radman.local/processor/internal/database"
 	"radman.local/processor/internal/geo"
 	"radman.local/processor/internal/tracker"
@@ -20,7 +21,6 @@ const (
 	StreamName    = "stream:visual:raw"
 	ConsumerGroup = "processor_group"
 	ConsumerName  = "worker_1"
-	H3Resolution  = 6
 )
 
 type TargetCluster struct {
@@ -30,12 +30,13 @@ type TargetCluster struct {
 }
 
 func main() {
+	config.Load()
 	database.ConnectTrackingDB()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "redis_db:6379",
-		Username: "radman_service",
-		Password: "ServicePass2026",
+		Addr:     config.App.Redis.Addr,
+		Username: config.App.Redis.User,
+		Password: config.App.Redis.Pass,
 		DB:       0,
 	})
 
@@ -82,7 +83,7 @@ func main() {
 					continue
 				}
 
-				cell, err := h3.LatLngToCell(h3.NewLatLng(batch.La, batch.Lo), H3Resolution)
+				cell, err := h3.LatLngToCell(h3.NewLatLng(batch.La, batch.Lo), config.App.Radar.H3Resolution)
 				if err != nil {
 					continue
 				}
@@ -109,25 +110,21 @@ func main() {
 			for targetType, cluster := range targets {
 				observerCount := len(cluster.Reports)
 				targetName := targetType.String()
+				agl := config.App.TargetsAGL[targetName]
 
 				if observerCount == 1 {
 					report := cluster.Reports[0]
-					agl := geo.DefaultAGL[targetType]
-
 					fmt.Printf("📥 [DATA INGEST] Absorbing %d historical points to calculate vector for %s...\n", len(report.P), targetName)
 
 					for _, point := range report.P {
 						dist := geo.CalculateDistance(agl, point.P)
 						tLat, tLon := geo.CalculateTargetCoordinates(report.La, report.Lo, dist, point.Az)
-						
 						tracker.ProcessNewDetection(targetName, tLat, tLon, agl, "Low", point.T)
 					}
 				} else {
 					var sumLat, sumLon float64
-					agl := geo.DefaultAGL[targetType]
 					validPoints := 0
-					
-					var batchTimestamp int64 
+					var batchTimestamp int64
 
 					for _, report := range cluster.Reports {
 						if len(report.P) > 0 {
@@ -137,7 +134,7 @@ func main() {
 							sumLat += lat
 							sumLon += lon
 							validPoints++
-							
+
 							if batchTimestamp == 0 {
 								batchTimestamp = lastPoint.T
 							}
@@ -147,7 +144,6 @@ func main() {
 					if validPoints > 0 {
 						avgLat := sumLat / float64(validPoints)
 						avgLon := sumLon / float64(validPoints)
-						
 						tracker.ProcessNewDetection(targetName, avgLat, avgLon, agl, "High", batchTimestamp)
 						fmt.Printf("🔥 [TRACKER INGEST] Multi-Observer (%d) -> Type: %s | Cell: %s\n", validPoints, targetName, cellID)
 					}
