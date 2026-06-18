@@ -30,10 +30,8 @@ type TargetCluster struct {
 }
 
 func main() {
-	// ۱. اتصال به دیتابیس مستقل رهگیری
 	database.ConnectTrackingDB()
 
-	// ۲. اتصال به ردیس
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "redis_db:6379",
 		Username: "radman_service",
@@ -49,7 +47,6 @@ func main() {
 
 	rdb.XGroupCreateMkStream(ctx, StreamName, ConsumerGroup, "0")
 
-	// ۳. راه‌اندازی سرویس پاکسازی اهداف رها شده (هر ۱۰ ثانیه چک می‌کند)
 	go func() {
 		cleanupTicker := time.NewTicker(10 * time.Second)
 		for range cleanupTicker.C {
@@ -57,11 +54,9 @@ func main() {
 		}
 	}()
 
-	// ۴. راه‌اندازی تپش مرکزی سیستم (تیک ۱ ثانیه‌ای)
 	mainTicker := time.NewTicker(1 * time.Second)
 
 	for range mainTicker.C {
-		// خواندن پیام‌ها (با بلاک نیم ثانیه‌ای تا در تیک بعدی تاخیر ایجاد نشود)
 		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    ConsumerGroup,
 			Consumer: ConsumerName,
@@ -77,7 +72,6 @@ func main() {
 		clusters := make(map[string]map[pb.TargetType]*TargetCluster)
 		var processedIDs []string
 
-		// فاز بلعیدن و خوشه‌بندی
 		for _, stream := range streams {
 			for _, message := range stream.Messages {
 				userID := message.Values["u"].(string)
@@ -111,7 +105,6 @@ func main() {
 			}
 		}
 
-		// فاز پردازش و ارسال به موتور رهگیری (State Machine)
 		for cellID, targets := range clusters {
 			for targetType, cluster := range targets {
 				observerCount := len(cluster.Reports)
@@ -121,23 +114,19 @@ func main() {
 					report := cluster.Reports[0]
 					agl := geo.DefaultAGL[targetType]
 
-					// فقط یک بار لاگ می‌ندازیم که دیتای پایه رو گرفتیم
 					fmt.Printf("📥 [DATA INGEST] Absorbing %d historical points to calculate vector for %s...\n", len(report.P), targetName)
 
 					for _, point := range report.P {
 						dist := geo.CalculateDistance(agl, point.P)
 						tLat, tLon := geo.CalculateTargetCoordinates(report.La, report.Lo, dist, point.Az)
 						
-						// ارسال نقاط به ترکر برای درآوردن سرعت (بدون لاگ اضافی)
 						tracker.ProcessNewDetection(targetName, tLat, tLon, agl, "Low", point.T)
 					}
 				} else {
-					// سناریوی چند کاربره (تخمین میانگین)
 					var sumLat, sumLon float64
 					agl := geo.DefaultAGL[targetType]
 					validPoints := 0
 					
-					// 🌟 یک متغیر برای ذخیره زمان تقریبیِ این گروه از گزارش‌ها
 					var batchTimestamp int64 
 
 					for _, report := range cluster.Reports {
@@ -149,7 +138,6 @@ func main() {
 							sumLon += lon
 							validPoints++
 							
-							// زمانِ اولین گزارش معتبر رو به عنوان زمانِ کل این گروه (Batch) در نظر می‌گیریم
 							if batchTimestamp == 0 {
 								batchTimestamp = lastPoint.T
 							}
@@ -160,7 +148,6 @@ func main() {
 						avgLat := sumLat / float64(validPoints)
 						avgLon := sumLon / float64(validPoints)
 						
-						// 🌟 حل ارور: پارامتر ششم (batchTimestamp) به تابع اضافه شد
 						tracker.ProcessNewDetection(targetName, avgLat, avgLon, agl, "High", batchTimestamp)
 						fmt.Printf("🔥 [TRACKER INGEST] Multi-Observer (%d) -> Type: %s | Cell: %s\n", validPoints, targetName, cellID)
 					}
@@ -168,7 +155,6 @@ func main() {
 			}
 		}
 
-		// تایید پیام‌ها در ردیس
 		if len(processedIDs) > 0 {
 			rdb.XAck(ctx, StreamName, ConsumerGroup, processedIDs...)
 		}
