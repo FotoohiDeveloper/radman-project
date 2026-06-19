@@ -12,7 +12,7 @@ radar:
   coast_timeout_seconds: 300
 
 targets_agl:
-  UFO: 1000.0
+  UFO: 10000.0
   CRUISE_MISSILE: 100.0
   DRONE: 200.0
   HELICOPTER: 500.0
