@@ -10,15 +10,14 @@ services:
       - radman_net
     restart: always
     environment:
-      POSTGRES_USER: radman_user
-      POSTGRES_PASSWORD: sdfs@
-      POSTGRES_DB: radman_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - ./pgdata:/var/lib/postgresql/data
 
-# Yadet bashe baad postgre ro be "127.0.0.1:5432:5432" tagher bedi
   redis_db:
     image: redis:alpine
     container_name: radman_redis
@@ -41,15 +40,15 @@ services:
       - postgres_db
     environment:
       - GODEBUG=netdns=go
-      - APP_ENV=production 
-      - DATABASE_URL=host=postgres_db user=radman_user password=sdfs@ dbname=radman_db port=5432 sslmode=disable TimeZone=Asia/Tehran
+      - APP_ENV=production
+      - DATABASE_URL=host=postgres_db user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} port=5432 sslmode=disable TimeZone=Asia/Tehran
     env_file:
       - ./backend/.env
     networks:
       - radman_net
 
   radman_ingestion:
-    build: 
+    build:
       context: ./ingestion
       dockerfile: Dockerfile
     container_name: radman_ingestion
@@ -59,21 +58,26 @@ services:
     depends_on:
       - redis_db
     environment:
-      - REDIS_URL=redis://radman_service:ServicePass2026@redis_db:6379/0
+      - REDIS_URL=redis://${REDIS_USER}:${REDIS_PASS}@redis_db:6379/0
       - GODEBUG=netdns=go
     env_file:
       - ./backend/.env
     networks:
       - radman_net
-  
 
   radman_processor:
-    build: 
+    build:
       context: ./processor
       dockerfile: Dockerfile
     container_name: radman_processor
     restart: always
     depends_on:
       - redis_db
+      - postgres_db
+    environment:
+      - REDIS_ADDR=redis_db:6379
+      - REDIS_USER=${REDIS_USER}
+      - REDIS_PASS=${REDIS_PASS}
+      - PROCESSOR_DATABASE_URL=host=postgres_db user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_TRACKING_DB} port=5432 sslmode=disable TimeZone=Asia/Tehran
     networks:
       - radman_net

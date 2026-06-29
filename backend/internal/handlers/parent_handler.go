@@ -285,14 +285,14 @@ func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 	}
 
 	s3Client := s3.NewFromConfig(aws.Config{
-		Region: "ir-thr-at1",
+		Region: os.Getenv("ARVAN_S3_REGION"),
 		Credentials: credentials.NewStaticCredentialsProvider(
 			os.Getenv("ARVAN_S3_ACCESS_KEY"),
 			os.Getenv("ARVAN_S3_SECRET_KEY"),
 			"",
 		),
 	}, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String("https://alifotoohi.s3.ir-thr-at1.arvanstorage.ir")
+		o.BaseEndpoint = aws.String(os.Getenv("ARVAN_S3_ENDPOINT"))
 		o.UsePathStyle = true
 	})
 
@@ -326,8 +326,9 @@ func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "خطا در آپلود مدرک فرزند به فضای ابری"})
 	}
 
-	parentURL := fmt.Sprintf("https://alifotoohi.s3.ir-thr-at1.arvanstorage.ir/%s/%s", bucketName, parentKey)
-	childURL := fmt.Sprintf("https://alifotoohi.s3.ir-thr-at1.arvanstorage.ir/%s/%s", bucketName, childKey)
+	s3PublicURL := os.Getenv("ARVAN_S3_ENDPOINT")
+	parentURL := fmt.Sprintf("%s/%s/%s", s3PublicURL, bucketName, parentKey)
+	childURL := fmt.Sprintf("%s/%s/%s", s3PublicURL, bucketName, childKey)
 
 	err = database.DB.Model(&models.User{}).Where("id = ?", childUUID).Updates(map[string]interface{}{
 		"parent_identity_card_url": parentURL,

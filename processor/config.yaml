@@ -1,10 +1,9 @@
 redis:
   addr: "redis_db:6379"
-  user: "radman_service"
-  pass: "ServicePass2026"
+  # user و pass از env می‌آن: REDIS_USER, REDIS_PASS
 
 db:
-  dsn: "host=postgres_db user=radman_user password=sdfs@ dbname=radman_tracking_db port=5432 sslmode=disable TimeZone=Asia/Tehran"
+  # dsn از env می‌آد: PROCESSOR_DATABASE_URL
 
 radar:
   h3_resolution: 6

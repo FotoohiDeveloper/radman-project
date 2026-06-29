@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -26,13 +27,18 @@ func main() {
 	go services.StartSMSWorker()
 
 	app := fiber.New(fiber.Config{
-		AppName: "Radman API v1.0",
+		AppName:     "Radman API v1.0",
 		TrustProxy:  true,
-		ProxyHeader: "ar-real-ip", 
+		ProxyHeader: "ar-real-ip",
 	})
 
+	allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		log.Fatal("❌ CORS_ALLOWED_ORIGIN environment variable is required")
+	}
+
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"https://auth.hapagate.ir"},
+		AllowOrigins:     []string{allowedOrigin},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "ar-real-ip", "X-Forwarded-For"},
 		AllowMethods:     []string{"GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS"},
 		AllowCredentials: true,
@@ -65,8 +71,12 @@ func main() {
 	routes.SetupSSORoutes(app)
 	routes.SetupParentRoutes(app)
 
-	log.Println("Starting Radman API on port 3000...")
-	if err := app.Listen(":3000"); err != nil {
+	port := os.Getenv("APP_PORT")
+	if port == "" {
+		port = "3000"
+	}
+	log.Printf("Starting Radman API on port %s...\n", port)
+	if err := app.Listen(":" + port); err != nil {
 		log.Fatal("Server failed to start: ", err)
 	}
 }

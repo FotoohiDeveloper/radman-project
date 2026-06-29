@@ -1,0 +1,5 @@
+protected-mode yes
+
+user default on >your_admin_password_here ~* &* +@all
+
+user radman_service on >your_service_password_here ~* &* +@all

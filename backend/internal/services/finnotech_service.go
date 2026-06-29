@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"sync"
 	"time"
-	"bytes"
 )
 
 var (
@@ -16,8 +16,6 @@ var (
 	tokenExpiry time.Time
 	tokenMutex  sync.Mutex
 )
-
-const FinnotechBaseURL = "https://api.finnotech.ir"
 
 func getFinnotechToken() (string, error) {
 	tokenMutex.Lock()
@@ -32,7 +30,7 @@ func getFinnotechToken() (string, error) {
 	nid := os.Getenv("FINNOTECH_NID")
 
 	auth := base64.StdEncoding.EncodeToString([]byte(clientID + ":" + clientSecret))
-	
+
 	body := map[string]string{
 		"grant_type": "client_credentials",
 		"nid":        nid,
@@ -40,7 +38,7 @@ func getFinnotechToken() (string, error) {
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	req, _ := http.NewRequest("POST", "https://apibeta.finnotech.ir/dev/v2/oauth2/token", bytes.NewBuffer(jsonBody))
+	req, _ := http.NewRequest("POST", os.Getenv("FINNOTECH_TOKEN_URL"), bytes.NewBuffer(jsonBody))
 	req.Header.Add("Authorization", "Basic "+auth)
 	req.Header.Add("Content-Type", "application/json")
 
@@ -71,8 +69,8 @@ func CheckFinnotechIdentity(nationalCode, birthDate string) (map[string]interfac
 	}
 
 	clientID := os.Getenv("FINNOTECH_CLIENT_ID")
-	url := fmt.Sprintf("%s/kyc/v2/clients/%s/identificationInquiry?nationalCode=%s&birthDate=%s", 
-		FinnotechBaseURL, clientID, nationalCode, birthDate)
+	url := fmt.Sprintf("%s/kyc/v2/clients/%s/identificationInquiry?nationalCode=%s&birthDate=%s",
+		os.Getenv("FINNOTECH_BASE_URL"), clientID, nationalCode, birthDate)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Add("Authorization", "Bearer "+token)
