@@ -1,9 +1,9 @@
 redis:
   addr: "redis_db:6379"
-  # user و pass از env می‌آن: REDIS_USER, REDIS_PASS
+  # user and pass are loaded from env: REDIS_USER, REDIS_PASS
 
 db:
-  # dsn از env می‌آد: PROCESSOR_DATABASE_URL
+  # dsn is loaded from env: PROCESSOR_DATABASE_URL
 
 radar:
   h3_resolution: 6

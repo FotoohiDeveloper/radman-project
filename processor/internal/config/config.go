@@ -35,7 +35,7 @@ func Load() {
 		log.Fatalf("❌ Error reading config file: %v", err)
 	}
 
-	// متغیرهای حساس از env خوانده می‌شن و بر config.yaml اولویت دارن
+	// sensitive values are read from env vars and take precedence over config.yaml
 	viper.BindEnv("redis.addr", "REDIS_ADDR")
 	viper.BindEnv("redis.user", "REDIS_USER")
 	viper.BindEnv("redis.pass", "REDIS_PASS")

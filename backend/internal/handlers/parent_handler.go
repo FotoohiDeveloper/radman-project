@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"radman.local/backend/internal/database"
+	"radman.local/backend/internal/i18n"
 	"radman.local/backend/internal/models"
 	"radman.local/backend/internal/services"
 )
@@ -33,7 +34,6 @@ func generateParentSecureOTP() string {
 	return fmt.Sprintf("%06d", n.Int64()+100000)
 }
 
-// 🚨 متد کمکی برای بررسی سن قانونی (حداقل ۱۸ سال)
 func isAdult(birthDate *time.Time) bool {
 	if birthDate == nil {
 		return false
@@ -42,44 +42,41 @@ func isAdult(birthDate *time.Time) bool {
 	return birthDate.Before(eighteenYearsAgo)
 }
 
-// ۱. ارسال پیامک کد تایید به شماره جدید فرزند همراه با شرط ۱۸ سال و تله زمانی ۲ دقیقه‌ای
 func (h *ParentHandler) SendChildOTP(c fiber.Ctx) error {
 	parentIDStr := c.Locals("user_id").(string)
 
-	// استخراج اطلاعات والد برای چک کردن سن ۱۸ سال
 	var parent models.User
 	if err := database.DB.Where("id = ?", parentIDStr).First(&parent).Error; err != nil {
-		return c.Status(444).JSON(fiber.Map{"error": "اطلاعات والد یافت نشد"})
+		return c.Status(444).JSON(fiber.Map{"error": i18n.T("parent.not_found")})
 	}
 
-	// 🚨 اعمال شرط سن بالای ۱۸ سال
 	if !isAdult(parent.BirthDate) {
-		return c.Status(403).JSON(fiber.Map{"error": "افراد زیر ۱۸ سال (فرزندان) مجاز به ثبت فرزند جدید در سیستم نیستند."})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("parent.underage")})
 	}
 
 	var req struct {
 		ChildPhone string `json:"child_phone_number"`
 	}
 	if err := c.Bind().Body(&req); err != nil || req.ChildPhone == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "شماره موبایل فرزند الزامی است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.child_phone_required")})
 	}
 
 	var existingUser models.User
 	if err := database.DB.Where("phone_number = ?", req.ChildPhone).First(&existingUser).Error; err == nil {
-		return c.Status(400).JSON(fiber.Map{"error": "این شماره موبایل قبلاً در سیستم ثبت شده است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.phone_exists")})
 	}
 
 	var lastOtp models.OtpSession
 	if err := database.DB.Where("sso_req_id = ?", parentIDStr).Order("created_at desc").First(&lastOtp).Error; err == nil {
 		if time.Now().Before(lastOtp.ExpiresAt) {
-			return c.Status(429).JSON(fiber.Map{"error": "شما هر ۲ دقیقه یک‌بار مجاز به ارسال کد جدید هستید. لطفاً کمی صبر کنید."})
+			return c.Status(429).JSON(fiber.Map{"error": i18n.T("auth.otp_cooldown")})
 		}
 	}
 
 	rawCode := generateParentSecureOTP()
 	hashedCode, err := bcrypt.GenerateFromPassword([]byte(rawCode), bcrypt.DefaultCost)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در سیستم امنیتی"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("auth.security_error")})
 	}
 
 	otp := models.OtpSession{
@@ -95,7 +92,6 @@ func (h *ParentHandler) SendChildOTP(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "uid": otp.UID})
 }
 
-// ۲. تایید OTP و استعلام شاهکار شماره جدید با کد ملی والدی که لاگین است
 func (h *ParentHandler) VerifyChildOTP(c fiber.Ctx) error {
 	parentIDStr := c.Locals("user_id").(string)
 
@@ -107,51 +103,49 @@ func (h *ParentHandler) VerifyChildOTP(c fiber.Ctx) error {
 
 	var otp models.OtpSession
 	if err := database.DB.Where("uid = ?", req.UID).First(&otp).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "نشست یافت نشد"})
+		return c.Status(404).JSON(fiber.Map{"error": i18n.T("auth.session_not_found")})
 	}
 
 	if otp.Attempts >= 2 || time.Now().After(otp.ExpiresAt) {
 		database.DB.Delete(&otp)
-		return c.Status(400).JSON(fiber.Map{"error": "کد منقضی شده یا دفعات مجاز تمام شده است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("auth.otp_exhausted")})
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(otp.CodeHash), []byte(req.Code)); err != nil {
 		otp.Attempts++
 		database.DB.Save(&otp)
-		return c.Status(400).JSON(fiber.Map{"error": "کد اشتباه است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("auth.wrong_code")})
 	}
 
 	var parent models.User
 	if err := database.DB.Where("id = ?", parentIDStr).First(&parent).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "اطلاعات والد یافت نشد"})
+		return c.Status(404).JSON(fiber.Map{"error": i18n.T("parent.not_found")})
 	}
 
 	shahkar, err := services.CheckShahkar(otp.Phone, *parent.NationalID)
 	if err != nil || !shahkar {
 		otp.KycFails++
 		database.DB.Save(&otp)
-		return c.Status(403).JSON(fiber.Map{"error": "عدم تطابق شماره جدید با کد ملی والد (سیم‌کارت حتما باید به نام خودتان باشد)"})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("parent.shahkar_mismatch")})
 	}
 
 	otp.IsVerified = true
 	database.DB.Save(&otp)
 
-	return c.JSON(fiber.Map{"success": true, "message": "شماره جدید با موفقیت تایید و احراز شد"})
+	return c.JSON(fiber.Map{"success": true, "message": i18n.T("parent.child_verified")})
 }
 
-// ۳. استعلام ثبت احوال فرزند و ایجاد کاربر موقت با ساختار قفل منحصربه‌فرد و بررسی سن قانونی والد
 func (h *ParentHandler) RegisterChildKYC(c fiber.Ctx) error {
 	parentIDStr := c.Locals("user_id").(string)
 	parentUUID, _ := uuid.Parse(parentIDStr)
 
 	var parent models.User
 	if err := database.DB.Where("id = ?", parentIDStr).First(&parent).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "اطلاعات والد یافت نشد"})
+		return c.Status(404).JSON(fiber.Map{"error": i18n.T("parent.not_found")})
 	}
 
-	// 🚨 اعمال شرط سن بالای ۱۸ سال در زمان استعلام و ساخت فرزند
 	if !isAdult(parent.BirthDate) {
-		return c.Status(403).JSON(fiber.Map{"error": "افراد زیر ۱۸ سال مجاز به ثبت فرزند جدید نیستند."})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("parent.underage")})
 	}
 
 	var req struct {
@@ -160,17 +154,17 @@ func (h *ParentHandler) RegisterChildKYC(c fiber.Ctx) error {
 		BirthDate    string `json:"birth_date"`
 	}
 	if err := c.Bind().Body(&req); err != nil || req.UID == "" || req.NationalCode == "" || req.BirthDate == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "لطفاً تمام فیلدها را پر کنید"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.fill_fields")})
 	}
 
 	var otp models.OtpSession
 	if err := database.DB.Where("uid = ?", req.UID).First(&otp).Error; err != nil || !otp.IsVerified {
-		return c.Status(403).JSON(fiber.Map{"error": "ابتدا باید مرحله تایید شماره موبایل را انجام دهید"})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("parent.verify_first")})
 	}
 
 	var existingChild models.User
 	if err := database.DB.Where("national_id = ?", req.NationalCode).First(&existingChild).Error; err == nil {
-		return c.Status(400).JSON(fiber.Map{"error": "این کد ملی فرزند قبلاً توسط یکی از والدین در سیستم ثبت شده است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.child_nid_exists")})
 	}
 
 	identity, err := services.CheckFinnotechIdentity(req.NationalCode, req.BirthDate)
@@ -218,7 +212,7 @@ func (h *ParentHandler) RegisterChildKYC(c fiber.Ctx) error {
 	tx := database.DB.Begin()
 	if err := tx.Create(&childUser).Error; err != nil {
 		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در ایجاد اکانت فرزند"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.child_create_error")})
 	}
 
 	relation := models.ChildRelation{
@@ -227,7 +221,7 @@ func (h *ParentHandler) RegisterChildKYC(c fiber.Ctx) error {
 	}
 	if err := tx.Create(&relation).Error; err != nil {
 		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در برقراری ارتباط والد و فرزندی"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.relation_create_error")})
 	}
 	tx.Commit()
 
@@ -236,52 +230,51 @@ func (h *ParentHandler) RegisterChildKYC(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success":  true,
 		"child_id": childUser.ID,
-		"message":  "اطلاعات اولیه فرزند ثبت شد. لطفاً در مرحله بعد مدارک شناسایی را بارگذاری کنید.",
+		"message":  i18n.T("parent.child_kyc_done"),
 	})
 }
 
-// ۴. بارگذاری مدارک شناسایی فرزند و والد به فضای ابری S3 ابر آروان
 func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 	parentIDStr := c.Locals("user_id").(string)
 	parentUUID, err := uuid.Parse(parentIDStr)
 	if err != nil {
-		return c.Status(401).JSON(fiber.Map{"error": "کاربر غیرمجاز"})
+		return c.Status(401).JSON(fiber.Map{"error": i18n.T("parent.unauthorized")})
 	}
 
 	childIDStr := c.FormValue("child_id")
 	if childIDStr == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "ارسال آیدی فرزند (child_id) الزامی است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.child_id_required")})
 	}
 	childUUID, err := uuid.Parse(childIDStr)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "فرمت آیدی فرزند نامعتبر است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.child_id_invalid")})
 	}
 
 	var relation models.ChildRelation
 	if err := database.DB.Where("parent_id = ? AND child_id = ?", parentUUID, childUUID).First(&relation).Error; err != nil {
-		return c.Status(403).JSON(fiber.Map{"error": "شما مجاز به بارگذاری مدارک برای این فرزند نیستید"})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("parent.upload_forbidden")})
 	}
 
 	parentCardHeader, err := c.FormFile("parent_identity_card")
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "بارگذاری تصویر شناسنامه/کارت‌ملی والد الزامی است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.parent_card_required")})
 	}
 
 	childCardHeader, err := c.FormFile("child_identity_card")
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "بارگذاری تصویر شناسنامه فرزند الزامی است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.child_card_required")})
 	}
 
-	const maxFileSize = 3 * 1024 * 1024 // 3MB
+	const maxFileSize = 3 * 1024 * 1024
 	if parentCardHeader.Size > maxFileSize || childCardHeader.Size > maxFileSize {
-		return c.Status(400).JSON(fiber.Map{"error": "حجم هر تصویر نباید بیشتر از ۳ مگابایت باشد"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.file_too_large")})
 	}
 
 	allowedExtensions := map[string]bool{".jpg": true, ".jpeg": true, ".png": true}
 	parentExt := strings.ToLower(filepath.Ext(parentCardHeader.Filename))
 	childExt := strings.ToLower(filepath.Ext(childCardHeader.Filename))
 	if !allowedExtensions[parentExt] || !allowedExtensions[childExt] {
-		return c.Status(400).JSON(fiber.Map{"error": "فرمت فایل‌ها حتماً باید تصویر (png, jpg, jpeg) باشد"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("parent.invalid_file_type")})
 	}
 
 	s3Client := s3.NewFromConfig(aws.Config{
@@ -309,7 +302,7 @@ func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 		ACL:    types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در آپلود مدرک والد به فضای ابری"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.parent_upload_error")})
 	}
 
 	childFile, _ := childCardHeader.Open()
@@ -323,7 +316,7 @@ func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 		ACL:    types.ObjectCannedACLPublicRead,
 	})
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در آپلود مدرک فرزند به فضای ابری"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.child_upload_error")})
 	}
 
 	s3PublicURL := os.Getenv("ARVAN_S3_ENDPOINT")
@@ -334,30 +327,28 @@ func (h *ParentHandler) UploadChildDocuments(c fiber.Ctx) error {
 		"parent_identity_card_url": parentURL,
 		"child_identity_card_url":  childURL,
 	}).Error
-
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در نهایی‌سازی مدارک فرزند در دیتابیس"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.doc_save_error")})
 	}
 
-	var parent models.User
-	if err := database.DB.Where("id = ?", parentIDStr).First(&parent).Error; err == nil {
-		services.SendOTPAsync(*parent.PhoneNumber, "ثبت نام فرزند شما انجام شد و پس از بررسی ادمین فعال می‌گردد.")
+	var parentUser models.User
+	if err := database.DB.Where("id = ?", parentIDStr).First(&parentUser).Error; err == nil {
+		services.SendOTPAsync(*parentUser.PhoneNumber, i18n.T("parent.child_registered_sms"))
 	}
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"message": "مدارک با موفقیت بارگذاری شد. نتیجه پس از بررسی ادمین به شما پیامک خواهد شد.",
+		"message": i18n.T("parent.docs_uploaded"),
 	})
 }
 
-// ۵. مشاهده لیست فرزندان ثبت شده توسط والد به همراه وضعیت تایید آن‌ها
 func (h *ParentHandler) GetChildrenList(c fiber.Ctx) error {
 	parentIDStr := c.Locals("user_id").(string)
 	parentUUID, _ := uuid.Parse(parentIDStr)
 
 	var childRelations []models.ChildRelation
 	if err := database.DB.Where("parent_id = ?", parentUUID).Find(&childRelations).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در واکشی ارتباطات فرزندی"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.children_fetch_error")})
 	}
 
 	if len(childRelations) == 0 {
@@ -371,7 +362,7 @@ func (h *ParentHandler) GetChildrenList(c fiber.Ctx) error {
 
 	var children []models.User
 	if err := database.DB.Where("id IN ?", childIDs).Find(&children).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در واکشی اطلاعات فرزندان"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("parent.children_data_error")})
 	}
 
 	var result []fiber.Map
@@ -387,8 +378,5 @@ func (h *ParentHandler) GetChildrenList(c fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"success": true,
-		"data":    result,
-	})
+	return c.JSON(fiber.Map{"success": true, "data": result})
 }

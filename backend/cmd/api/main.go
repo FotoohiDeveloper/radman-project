@@ -7,6 +7,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"radman.local/backend/internal/database"
+	"radman.local/backend/internal/i18n"
 	"radman.local/backend/internal/routes"
 	"radman.local/backend/internal/services"
 
@@ -23,6 +24,7 @@ func main() {
 	}
 
 	database.ConnectDB()
+	i18n.Load()
 
 	go services.StartSMSWorker()
 
@@ -61,12 +63,11 @@ func main() {
 		},
 		LimitReached: func(c fiber.Ctx) error {
 			return c.Status(429).JSON(fiber.Map{
-				"error": "تعداد درخواست‌های شما بیش از حد مجاز است. لطفاً یک دقیقه دیگر تلاش کنید.",
+				"error": i18n.T("common.rate_limited_global"),
 			})
 		},
 	}))
 
-	// ثبت روت‌ها
 	routes.SetupAuthRoutes(app)
 	routes.SetupSSORoutes(app)
 	routes.SetupParentRoutes(app)

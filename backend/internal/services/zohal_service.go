@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+
 	ptime "github.com/yaa110/go-persian-calendar"
 	"radman.local/backend/internal/models"
 )
@@ -18,7 +19,7 @@ func CheckShahkar(mobile, nationalCode string) (bool, error) {
 		Mobile:       mobile,
 		NationalCode: nationalCode,
 	}
-	
+
 	respData, err := sendZohalRequest("/shahkar", reqBody)
 	if err != nil {
 		return false, err
@@ -52,10 +53,10 @@ func CheckNationalIdentity(nationalCode, birthDate string) (map[string]interface
 
 func sendZohalRequest(endpoint string, payload interface{}) (*models.ZohalResponse, error) {
 	token := os.Getenv("ZOHAL_API_TOKEN")
-	
+
 	jsonPayload, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", ZohalBaseURL+endpoint, bytes.NewBuffer(jsonPayload))
-	
+
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Authorization", "Bearer "+token)
 
@@ -85,7 +86,7 @@ func ShamsiToGregorian(shamsiStr string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("فرمت تاریخ نامعتبر است")
 	}
 
-	// ساعت رو روی ۱۲ ظهر تنظیم می‌کنیم که مشکل جابجایی روز به خاطر تایم‌زون پیش نیاد
+	// set to noon to prevent timezone-induced day shift
 	pt := ptime.Date(year, ptime.Month(month), day, 12, 0, 0, 0, ptime.Iran())
 	return pt.Time(), nil
 }

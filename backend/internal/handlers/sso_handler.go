@@ -4,14 +4,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
-	"time"
+	"log"
 	"os"
-	
+	"time"
+
 	"github.com/gofiber/fiber/v3"
-	"github.com/google/uuid"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"radman.local/backend/internal/database"
+	"radman.local/backend/internal/i18n"
 	"radman.local/backend/internal/models"
 	"radman.local/backend/internal/utils"
 )
@@ -23,12 +24,11 @@ func NewSSOHandler() *SSOHandler {
 }
 
 func (h *SSOHandler) InitFlow(c fiber.Ctx) error {
-
 	var req struct {
 		CodeChallenge string `json:"code_challenge"`
 	}
 	if err := c.Bind().Body(&req); err != nil || req.CodeChallenge == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "code_challenge is required"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("sso.invalid_request")})
 	}
 
 	ssoReq := models.SsoRequest{
@@ -40,7 +40,7 @@ func (h *SSOHandler) InitFlow(c fiber.Ctx) error {
 	}
 	database.DB.Create(&ssoReq)
 
-	portalURL := "https://auth.hapagate.ir/portal?req_id=" + ssoReq.ID.String()
+	portalURL := os.Getenv("CORS_ALLOWED_ORIGIN") + "/portal?req_id=" + ssoReq.ID.String()
 	return c.JSON(fiber.Map{
 		"url":    portalURL,
 		"req_id": ssoReq.ID,
@@ -50,16 +50,16 @@ func (h *SSOHandler) InitFlow(c fiber.Ctx) error {
 func (h *SSOHandler) Token(c fiber.Ctx) error {
 	var req models.TokenRequest
 	if err := c.Bind().Body(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "فرمت درخواست نامعتبر است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("sso.invalid_request")})
 	}
 
 	if req.AuthCode == "" || req.CodeVerifier == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "فیلد auth_code یا code_verifier خالی است! (شاید پستمن روی JSON تنظیم نشده)"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("sso.invalid_request")})
 	}
 
 	var ssoReq models.SsoRequest
 	if err := database.DB.Where("auth_code = ?", req.AuthCode).First(&ssoReq).Error; err != nil {
-		return c.Status(403).JSON(fiber.Map{"error": "کد نامعتبر است یا قبلا استفاده شده"})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("sso.invalid_auth_code")})
 	}
 
 	hash := sha256.New()
@@ -67,7 +67,7 @@ func (h *SSOHandler) Token(c fiber.Ctx) error {
 	expectedChallenge := base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
 
 	if expectedChallenge != ssoReq.CodeChallenge {
-		return c.Status(403).JSON(fiber.Map{"error": "خطر امنیتی: عدم تطابق کلاینت (احتمال سرقت کد)"})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("sso.pkce_mismatch")})
 	}
 
 	database.DB.Model(&ssoReq).Updates(map[string]interface{}{
@@ -83,7 +83,7 @@ func (h *SSOHandler) Token(c fiber.Ctx) error {
 
 	accessToken, refreshToken, err := utils.GenerateTokens(*ssoReq.UserID, sessionID)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در تولید کلیدهای دسترسی"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("sso.token_error")})
 	}
 
 	hashRT := sha256.Sum256([]byte(refreshToken))
@@ -101,8 +101,8 @@ func (h *SSOHandler) Token(c fiber.Ctx) error {
 	}
 
 	if err := database.DB.Create(&newSession).Error; err != nil {
-		fmt.Println("🚨 Database Error creating session:", err)
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در ذخیره نشست در سرور"})
+		log.Printf("❌ failed to create session: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("sso.session_error")})
 	}
 
 	return c.JSON(fiber.Map{
@@ -119,7 +119,7 @@ func (h *SSOHandler) GetMe(c fiber.Ctx) error {
 
 	var user models.User
 	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "کاربر یافت نشد"})
+		return c.Status(404).JSON(fiber.Map{"error": i18n.T("sso.user_not_found")})
 	}
 
 	return c.JSON(fiber.Map{
@@ -139,13 +139,10 @@ func (h *SSOHandler) Logout(c fiber.Ctx) error {
 	sessionID := c.Locals("session_id").(string)
 
 	if err := database.DB.Model(&models.Session{}).Where("id = ?", sessionID).Update("is_revoked", true).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در خروج از حساب کاربری"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("sso.logout_error")})
 	}
 
-	return c.JSON(fiber.Map{
-		"success": true, 
-		"message": "با موفقیت از سیستم خارج شدید",
-	})
+	return c.JSON(fiber.Map{"success": true, "message": i18n.T("sso.logout_success")})
 }
 
 func (h *SSOHandler) RefreshToken(c fiber.Ctx) error {
@@ -153,7 +150,7 @@ func (h *SSOHandler) RefreshToken(c fiber.Ctx) error {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if err := c.Bind().Body(&req); err != nil || req.RefreshToken == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "رفرش توکن ارسال نشده است"})
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T("sso.refresh_missing")})
 	}
 
 	token, err := jwt.Parse(req.RefreshToken, func(token *jwt.Token) (interface{}, error) {
@@ -161,12 +158,12 @@ func (h *SSOHandler) RefreshToken(c fiber.Ctx) error {
 	})
 
 	if err != nil || !token.Valid {
-		return c.Status(401).JSON(fiber.Map{"error": "رفرش توکن نامعتبر یا منقضی شده است. لطفا دوباره لاگین کنید."})
+		return c.Status(401).JSON(fiber.Map{"error": i18n.T("sso.refresh_invalid")})
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || claims["type"] != "refresh" {
-		return c.Status(401).JSON(fiber.Map{"error": "توکن ارسال شده از نوع رفرش نیست"})
+		return c.Status(401).JSON(fiber.Map{"error": i18n.T("sso.not_refresh_token")})
 	}
 
 	sessionIDStr := claims["session_id"].(string)
@@ -174,20 +171,20 @@ func (h *SSOHandler) RefreshToken(c fiber.Ctx) error {
 
 	var session models.Session
 	if err := database.DB.Where("id = ?", sessionIDStr).First(&session).Error; err != nil {
-		return c.Status(401).JSON(fiber.Map{"error": "نشست یافت نشد"})
+		return c.Status(401).JSON(fiber.Map{"error": i18n.T("sso.session_not_found")})
 	}
 
 	if session.IsRevoked {
-		return c.Status(401).JSON(fiber.Map{"error": "این نشست باطل شده است"})
+		return c.Status(401).JSON(fiber.Map{"error": i18n.T("sso.session_revoked")})
 	}
 
 	hashRT := sha256.Sum256([]byte(req.RefreshToken))
 	refreshHashHex := hex.EncodeToString(hashRT[:])
-	
+
 	if session.RefreshTokenHash != refreshHashHex {
 		session.IsRevoked = true
 		database.DB.Save(&session)
-		return c.Status(403).JSON(fiber.Map{"error": "خطر امنیتی: عدم تطابق توکن. نشست شما باطل شد."})
+		return c.Status(403).JSON(fiber.Map{"error": i18n.T("sso.token_reuse")})
 	}
 
 	userID, _ := uuid.Parse(userIDStr)
@@ -195,7 +192,7 @@ func (h *SSOHandler) RefreshToken(c fiber.Ctx) error {
 
 	newAccess, newRefresh, err := utils.GenerateTokens(userID, sessionID)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "خطا در تولید کلیدهای دسترسی جدید"})
+		return c.Status(500).JSON(fiber.Map{"error": i18n.T("sso.token_error")})
 	}
 
 	newHashRT := sha256.Sum256([]byte(newRefresh))

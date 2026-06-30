@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
 	"radman.local/backend/internal/handlers"
+	"radman.local/backend/internal/i18n"
 	"radman.local/backend/internal/middleware"
 )
 
@@ -28,7 +29,7 @@ func SetupParentRoutes(api fiber.Router) {
 		},
 		LimitReached: func(c fiber.Ctx) error {
 			return c.Status(429).JSON(fiber.Map{
-				"error": "تعداد درخواست‌های شما برای این بخش بیش از حد مجاز است. لطفا ۱۵ دقیقه دیگر تلاش کنید.",
+				"error": i18n.T("common.rate_limited_parent"),
 			})
 		},
 	})
